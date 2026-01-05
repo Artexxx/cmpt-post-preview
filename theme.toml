@@ -17,5 +17,5 @@ tags = ['shortcodes']
 features = ['fixit-docs']
 
 [author]
-  name = 'Artexxx'
-  homepage = 'https://artexxx.github.io/'
+name = 'Artexxx'
+homepage = 'https://artexxx.github.io/'

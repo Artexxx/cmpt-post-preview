@@ -9,7 +9,7 @@ const POST_PREVIEW = {
         this.setParameters();
         this.guard();
         this.bindEvent();
-        this.log("init", { pathname: this.pathname, config: this.cfg });
+        this.log("init", {pathname: this.pathname, config: this.cfg});
     },
 
     setParameters: function () {
@@ -93,7 +93,7 @@ const POST_PREVIEW = {
             if (!self.isEligibleLink(a)) return;
 
             self.getOrCreate(a);
-        }, { passive: true });
+        }, {passive: true});
     },
 
     isBlockedByExclude: function (a) {
@@ -107,7 +107,11 @@ const POST_PREVIEW = {
     },
 
     toURL: function (href) {
-        try { return new URL(href, this.window.location.href); } catch { return null; }
+        try {
+            return new URL(href, this.window.location.href);
+        } catch {
+            return null;
+        }
     },
 
     prettyUrl: function (href) {
@@ -183,7 +187,7 @@ const POST_PREVIEW = {
         body.append(load);
         box.append(head, body);
 
-        return { box: box, urlA: urlA, close: close, body: body, load: load };
+        return {box: box, urlA: urlA, close: close, body: body, load: load};
     },
 
     getOrCreate: function (a) {
@@ -207,16 +211,19 @@ const POST_PREVIEW = {
             appendTo: this.document.body,
             popperOptions: {
                 modifiers: {
-                    offset: { offset: "0,8" },
-                    preventOverflow: { boundariesElement: "viewport", padding: 8 },
-                    flip: { enabled: false }
+                    offset: {offset: "0,8"},
+                    preventOverflow: {boundariesElement: "viewport", padding: 8},
+                    flip: {enabled: false}
                 }
             },
             content: ui.box,
 
             onShow: function (instance) {
                 if (self.active && self.active !== instance) {
-                    try { self.active.hide(); } catch {}
+                    try {
+                        self.active.hide();
+                    } catch {
+                    }
                 }
                 self.active = instance;
 
@@ -227,13 +234,19 @@ const POST_PREVIEW = {
                 ui.close.onclick = function (e) {
                     e.preventDefault();
                     e.stopPropagation();
-                    try { instance.hide(); } catch {}
+                    try {
+                        instance.hide();
+                    } catch {
+                    }
                 };
 
                 ui.load.hidden = false;
 
                 ui.body.querySelectorAll("iframe").forEach(function (f) {
-                    try { f.src = "about:blank"; } catch {}
+                    try {
+                        f.src = "about:blank";
+                    } catch {
+                    }
                     f.remove();
                 });
 
@@ -245,7 +258,7 @@ const POST_PREVIEW = {
                 iframe.addEventListener("load", function () {
                     ui.load.hidden = true;
                     if (instance.popperInstance && instance.popperInstance.update) instance.popperInstance.update();
-                }, { once: true });
+                }, {once: true});
 
                 iframe.src = href;
                 ui.body.appendChild(iframe);
@@ -255,7 +268,10 @@ const POST_PREVIEW = {
 
             onHidden: function (instance) {
                 ui.body.querySelectorAll("iframe").forEach(function (f) {
-                    try { f.src = "about:blank"; } catch {}
+                    try {
+                        f.src = "about:blank";
+                    } catch {
+                    }
                     f.remove();
                 });
                 ui.load.hidden = true;
@@ -280,25 +296,37 @@ const POST_PREVIEW = {
             if (hideT) self.window.clearTimeout(hideT);
             hideT = self.window.setTimeout(function () {
                 if (overRef || overPop) return;
-                try { inst.hide(); } catch {}
+                try {
+                    inst.hide();
+                } catch {
+                }
             }, self.cfg.hideDelay);
         }
 
         a.addEventListener("mouseenter", function () {
             overRef = true;
-            if (hideT) { self.window.clearTimeout(hideT); hideT = 0; }
+            if (hideT) {
+                self.window.clearTimeout(hideT);
+                hideT = 0;
+            }
             if (showT) self.window.clearTimeout(showT);
             showT = self.window.setTimeout(function () {
                 if (!overRef) return;
-                try { inst.show(); } catch {}
+                try {
+                    inst.show();
+                } catch {
+                }
             }, self.cfg.showDelay);
-        }, { passive: true });
+        }, {passive: true});
 
-        // a.addEventListener("mouseleave", function () {
-        //     overRef = false;
-        //     if (showT) { self.window.clearTimeout(showT); showT = 0; }
-        //     scheduleHide();
-        // }, { passive: true });
+        a.addEventListener("mouseleave", function () {
+            overRef = false;
+            if (showT) {
+                self.window.clearTimeout(showT);
+                showT = 0;
+            }
+            scheduleHide();
+        }, {passive: true});
 
         const origShow = inst.show.bind(inst);
         inst.show = function () {
@@ -310,21 +338,27 @@ const POST_PREVIEW = {
 
                 pop.addEventListener("mouseenter", function () {
                     overPop = true;
-                    if (hideT) { self.window.clearTimeout(hideT); hideT = 0; }
-                }, { passive: true });
+                    if (hideT) {
+                        self.window.clearTimeout(hideT);
+                        hideT = 0;
+                    }
+                }, {passive: true});
 
                 pop.addEventListener("mouseleave", function () {
                     overPop = false;
                     scheduleHide();
-                }, { passive: true });
+                }, {passive: true});
             });
         };
     }
 };
 
 function boot() {
-    try { POST_PREVIEW.init(); } catch (e) {}
+    try {
+        POST_PREVIEW.init();
+    } catch (e) {
+    }
 }
 
 if (document.readyState === "complete") boot();
-else window.addEventListener("load", boot, { once: true });
+else window.addEventListener("load", boot, {once: true});

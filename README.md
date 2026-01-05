@@ -1,6 +1,7 @@
 # Post Previews (Hugo) — Internal Page Popups
 
-A small component for the Hugo FixIt theme that shows a popup preview for **internal blog pages only** (same-origin HTML pages). It is designed to be fast, safe, and non-intrusive.
+A small component for the Hugo FixIt theme that shows a popup preview for **internal blog pages only** (same-origin HTML
+pages). It is designed to be fast, safe, and non-intrusive.
 
 ## Features
 
@@ -11,9 +12,9 @@ A small component for the Hugo FixIt theme that shows a popup preview for **inte
 - Disabled inside a configurable container selector (useful for post lists with built-in previews)
 - No recursion: it never runs inside iframes and never triggers on links inside the popup
 - Deferred loading: CSS and JS are injected **only after `window.load`**
-- “Crop top” behavior: the iframe view is shifted up by `cropTopPx` to hide the theme header without removing it (prevents layout jumps)
+- “Crop top” behavior: the iframe view is shifted up by `cropTopPx` to hide the theme header without removing it (
+  prevents layout jumps)
 - Optional debug logs
-
 
 ## Requirements
 
@@ -21,7 +22,8 @@ A small component for the Hugo FixIt theme that shows a popup preview for **inte
 
 ## Install Component
 
-The installation method is the same as [installing a theme](https://fixit.lruihao.cn/documentation/installation/). There are several ways to install, choose one, for example, install through Hugo Modules:
+The installation method is the same as [installing a theme](https://fixit.lruihao.cn/documentation/installation/). There
+are several ways to install, choose one, for example, install through Hugo Modules:
 
 ```diff
 [module]
@@ -33,14 +35,16 @@ The installation method is the same as [installing a theme](https://fixit.lruiha
 
 ## Configuration
 
-In order to Inject the partial `cmpt-post-preview.html` into the `custom-head` through the [custom block](https://fixit.lruihao.cn/references/blocks/) opened by the FixIt theme in the `layouts/_partials/custom.html` file, you need to fill in the following necessary configurations:
+In order to Inject the partial `cmpt-post-preview.html` into the `custom-head` through
+the [custom block](https://fixit.lruihao.cn/references/blocks/) opened by the FixIt theme in the
+`layouts/_partials/custom.html` file, you need to fill in the following necessary configurations:
 
 ```toml
 [params]
-  [params.customPartials]
-    # ... other partials
-    head = [ "inject/cmpt-post-preview.html" ]
-    # ... other partials
+[params.customPartials]
+# ... other partials
+head = ["inject/cmpt-post-preview.html"]
+# ... other partials
 ```
 
 ## Configuration
@@ -48,6 +52,7 @@ In order to Inject the partial `cmpt-post-preview.html` into the `custom-head` t
 All options live under `[linkPreviews]`.
 
 Common options:
+
 - `enable` (bool): master switch
 - `disableOnHome` (bool): disable on `/` and `/<lang>/`
 - `excludeSelector` (string): do not activate within this container
@@ -58,6 +63,7 @@ Common options:
 - `debug` (bool): console logs
 
 CDN settings:
+
 - `tippyCss`, `tippyAnimCss`, `tippyJs`
 
 in config/_default/params.toml:
@@ -88,4 +94,5 @@ tippyFromCdn = false
 
 - Previews work only for same-origin pages. External sites are intentionally ignored.
 - The iframe uses a permissive sandbox for internal pages to preserve FixIt styling and behavior.
-- If you want to further exclude areas, adjust `excludeSelector` or add additional selectors in the JS eligibility check.
+- If you want to further exclude areas, adjust `excludeSelector` or add additional selectors in the JS eligibility
+  check.
