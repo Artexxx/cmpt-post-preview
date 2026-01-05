@@ -1,0 +1,114 @@
+:root {
+  --pp-crop: {{ .cropTopPx }}px;
+}
+
+.tippy-popper[data-theme~="pp"] { max-width: none !important; z-index: 99999; }
+.tippy-tooltip.pp-theme { background: transparent; padding: 0; }
+.tippy-tooltip.pp-theme .tippy-content { padding: 0; }
+.tippy-arrow { display: none !important; }
+
+.pp-box {
+  width: 460px;
+  max-width: calc(100vw - 24px);
+
+  height: 50vh;
+  max-height: 620px;
+
+  min-width: 320px;
+  min-height: 240px;
+
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, .10);
+  background: rgba(14, 14, 20, .98);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .65);
+  overflow: hidden;
+
+  color: rgba(255,255,255,.92);
+  font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  display: flex;
+  flex-direction: column;
+}
+
+.pp-head {
+  height: 36px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+  background: rgba(0,0,0,.22);
+  user-select: none;
+}
+
+.pp-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255,255,255,.94);
+  text-decoration: none;
+  font-weight: 750;
+  border-bottom: none;
+}
+.pp-url:hover { text-shadow: 0 0 14px rgba(155,188,255,.28); }
+
+.pp-close {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.92);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+}
+.pp-close:hover {
+  border-color: rgba(255,255,255,.20);
+  background: rgba(255,255,255,.09);
+}
+
+.pp-body {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: rgba(0,0,0,.12);
+}
+
+.pp-frame {
+  width: 100%;
+  height: calc(100% + var(--pp-crop));
+  transform: translateY(calc(var(--pp-crop) * -1));
+  border: 0;
+  display: block;
+  background: transparent;
+}
+
+.pp-load {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0,0,0,.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 1;
+  transition: opacity 140ms ease;
+  pointer-events: none;
+}
+
+.pp-load[hidden] { opacity: 0; }
+
+.pp-spin {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(255,255,255,.18);
+  border-top-color: rgba(155,188,255,.85);
+  animation: pp-spin 0.85s linear infinite;
+}
+
+@keyframes pp-spin { to { transform: rotate(360deg); } }
