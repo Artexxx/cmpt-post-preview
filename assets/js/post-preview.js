@@ -1,364 +1,649 @@
 import params from '@params';
 
-/**
- * Tippy.js based internal page previews
- * @description Minimal hover popover with iframe, internal pages only
- */
-const POST_PREVIEW = {
-    init: function () {
-        this.setParameters();
-        this.guard();
-        this.bindEvent();
-        this.log("init", {pathname: this.pathname, config: this.cfg});
-    },
+class PostPreview {
+    constructor(configuration) {
+        this.configuration = configuration;
 
-    setParameters: function () {
-        this.window = window;
-        this.document = document;
+        /** @type {HTMLElement|null} */
+        this.excludeRootNode = null;
 
-        this.cfg = {
-            enable: !!params.enable,
-            debug: !!params.debug,
+        /** @type {boolean} */
+        this.excludeSelectorResolved = false;
+
+        /** @type {any|null} */
+        this.activeTippyInstance = null;
+
+        /** @type {HTMLAnchorElement|null} */
+        this.activeAnchorElement = null;
+
+        /** @type {number} */
+        this._defaultTippyDurationShow = 120;
+
+        /** @type {number} */
+        this._defaultTippyDurationHide = 110;
+
+        this.fileExtensionRegex =
+            /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|mp4|webm|mp3|wav|ogg|flac|pdf|zip|rar|7z|tar|gz|bz2|xz|dmg|exe|msi|apk|ipa|docx?|xlsx?|pptx?|csv|json|xml|yml|yaml|toml|map)$/i;
+
+        this.assetPathRegex =
+            /^\/(?:images|img|css|js|fonts|font|assets|static|files)\//i;
+
+        this.htmlExtensionRegex = /\.html?$/i;
+    }
+
+    static fromParams() {
+        return new PostPreview({
+            enable: Boolean(params.enable),
+            debug: Boolean(params.debug),
             mobileBp: Number(params.mobileBp || 900),
             disableOnHome: params.disableOnHome !== false,
-            excludeSelector: String(params.excludeSelector || ""),
+            excludeSelector: String(params.excludeSelector || ''),
             showDelay: Number(params.showDelay || 120),
             hideDelay: Number(params.hideDelay || 220),
-            cropTopPx: Number(params.cropTopPx || 100),
+            maxBytes: Number(params.maxBytes || 1200000),
+        });
+    }
+
+    static boot() {
+        const instance = PostPreview.fromParams();
+        try {
+            instance.init();
+        } catch (_) {
+        }
+    }
+
+    log(...argumentsList) {
+        // if (!this.configuration.debug) return;
+        // eslint-disable-next-line no-console
+        console.log('[post-preview]', ...argumentsList);
+    }
+
+    init() {
+        this.guardEnvironment();
+        this.bindHoverDelegation();
+        this.bindThemeSynchronization();
+        this.bindScrollHideRules();
+    }
+
+    guardEnvironment() {
+        if (!this.configuration.enable) throw 0;
+        if (window.top !== window.self) throw 0;
+
+        const matchMediaFn = window.matchMedia ? window.matchMedia.bind(window) : null;
+        const isMobileLike =
+            (window.innerWidth <= this.configuration.mobileBp) ||
+            (matchMediaFn && matchMediaFn('(hover: none)').matches) ||
+            (matchMediaFn && matchMediaFn('(pointer: coarse)').matches);
+
+        if (isMobileLike) throw 0;
+        if (!window.tippy) throw 0;
+
+        if (this.configuration.disableOnHome) {
+            const normalizedPathname = (String(window.location.pathname || '/').replace(/\/+$/, '') || '/');
+            const isHome =
+                normalizedPathname === '/' ||
+                /^\/[a-z]{2}(?:-[a-z]{2})?$/i.test(normalizedPathname);
+
+            if (isHome) throw 0;
+        }
+    }
+
+    getIsDarkTheme() {
+        if (typeof window.fixit?.isDark === 'boolean') return window.fixit.isDark;
+
+        const declaredTheme = document.documentElement.getAttribute('data-theme');
+        if (declaredTheme) return declaredTheme === 'dark';
+
+        return document.documentElement.classList.contains('dark');
+    }
+
+    applyThemeToAllOpenPreviews(isDarkTheme) {
+        document.querySelectorAll('.pp-box').forEach((previewBox) => {
+            previewBox.classList.toggle('pp--dark', Boolean(isDarkTheme));
+        });
+    }
+
+    bindThemeSynchronization() {
+        this.applyThemeToAllOpenPreviews(this.getIsDarkTheme());
+
+        if (typeof window.fixit?.switchThemeEventSet === 'object') {
+            window.fixit.switchThemeEventSet.add((isDarkTheme) => {
+                this.applyThemeToAllOpenPreviews(isDarkTheme);
+            });
+            return;
+        }
+
+        new MutationObserver(() => {
+            this.applyThemeToAllOpenPreviews(this.getIsDarkTheme());
+        }).observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['class', 'data-theme', 'style'],
+        });
+    }
+
+    bindHoverDelegation() {
+        document.addEventListener(
+            'mouseover',
+            (mouseEvent) => {
+                const anchorElement = mouseEvent.target?.closest?.('a[href]');
+                if (!anchorElement) return;
+                if (!this.isEligibleAnchor(anchorElement)) return;
+
+                this.mountPreviewForAnchor(anchorElement);
+            },
+            {passive: true}
+        );
+    }
+
+    bindScrollHideRules() {
+        const hideActiveInstant = () => {
+            const instance = this.activeTippyInstance;
+            if (!instance) return;
+            if (!instance.state?.isShown) return;
+
+            // hide instantly (no animation) just for this hide
+            try {
+                instance.setProps({duration: [0, 0]});
+            } catch {
+            }
+
+            try {
+                instance.hide();
+            } catch {
+            }
+
+            queueMicrotask(() => {
+                try {
+                    instance.setProps({duration: [this._defaultTippyDurationShow, this._defaultTippyDurationHide]});
+                } catch {
+                }
+            });
         };
 
-        this.pathname = "/";
-        try { this.pathname = this.window.location.pathname || "/"; } catch {}
+        const isEventInsideActivePopover = (eventTarget) => {
+            const instance = this.activeTippyInstance;
+            if (!instance || !instance.state?.isShown) return false;
 
-        this.instances = new WeakMap();
-        this.active = null;
+            const popper = instance.popper;
+            if (!popper) return false;
 
-        this.excludeNode = null;
-        this.excludeChecked = false;
+            return Boolean(eventTarget && popper.contains(eventTarget));
+        };
 
-        this.FILE_EXT_RE = /\.(?:png|jpe?g|gif|webp|avif|svg|ico|bmp|tiff?|mp4|webm|mp3|wav|ogg|flac|pdf|zip|rar|7z|tar|gz|bz2|xz|dmg|exe|msi|apk|ipa|docx?|xlsx?|pptx?|csv|json|xml|yml|yaml|toml|map)$/i;
-        this.ASSET_PATH_RE = /^\/(?:images|img|css|js|fonts|font|assets|static|files)\//i;
-        this.HTML_EXT_RE = /\.html?$/i;
-    },
+        // Capture scroll events from any scrollable element.
+        // Scroll doesn't bubble, but it *is* capturable.
+        document.addEventListener(
+            'scroll',
+            (e) => {
+                if (!this.activeTippyInstance || !this.activeTippyInstance.state?.isShown) return;
 
-    log: function () {
-        if (!this.cfg.debug) return;
-        console.log.apply(console, ["[post-preview]"].concat([].slice.call(arguments)));
-    },
+                // if scroll happens inside preview => keep it open
+                if (isEventInsideActivePopover(e.target)) return;
 
-    guard: function () {
-        if (!this.cfg.enable) throw new Error("disabled");
+                // otherwise => hide immediately
+                hideActiveInstant();
+            },
+            true
+        );
 
-        if (this.window.top !== this.window.self) {
-            this.log("disabled: iframe");
-            throw new Error("iframe");
-        }
+        // Wheel is useful when user "tries to scroll" outside (even if page can't scroll further).
+        window.addEventListener(
+            'wheel',
+            (e) => {
+                if (!this.activeTippyInstance || !this.activeTippyInstance.state?.isShown) return;
 
-        const mm = this.window.matchMedia ? this.window.matchMedia.bind(this.window) : null;
-        const isMobileLike =
-            (this.window.innerWidth <= this.cfg.mobileBp) ||
-            (mm && mm("(hover: none)").matches) ||
-            (mm && mm("(pointer: coarse)").matches);
+                if (isEventInsideActivePopover(e.target)) return;
 
-        if (isMobileLike) {
-            this.log("disabled: mobile/touch");
-            throw new Error("mobile");
-        }
+                // if user scrolls on the anchor itself, treat it as "outside" (hide)
+                // to avoid sticky previews while page moves
+                hideActiveInstant();
+            },
+            {passive: true, capture: true}
+        );
+    }
 
-        if (!this.window.tippy) {
-            this.log("disabled: tippy not found");
-            throw new Error("tippy");
-        }
+    isEligibleAnchor(anchorElement) {
+        if (!anchorElement.closest('main')) return false;
+        if (anchorElement.closest('header,footer,.tippy-popper')) return false;
+        if (this.isBlockedByExcludeSelector(anchorElement)) return false;
 
-        if (this.cfg.disableOnHome) {
-            const norm = (String(this.pathname).replace(/\/+$/, "") || "/");
-            const isHome = (norm === "/") || /^\/[a-z]{2}(?:-[a-z]{2})?$/i.test(norm);
-            if (isHome) {
-                this.log("disabled: home");
-                throw new Error("home");
-            }
-        }
-    },
+        const rawHref = (anchorElement.getAttribute('href') || '').trim();
+        if (!rawHref) return false;
+        if (rawHref[0] === '#') return false;
+        if (/^(mailto:|tel:|javascript:)/i.test(rawHref)) return false;
+        if (anchorElement.hasAttribute('download')) return false;
 
-    bindEvent: function () {
-        const self = this;
-
-        this.document.addEventListener("mouseover", function (e) {
-            const t = e.target;
-            if (!t) return;
-
-            const a = t.closest ? t.closest("a[href]") : null;
-            if (!a) return;
-
-            if (!self.isEligibleLink(a)) return;
-
-            self.getOrCreate(a);
-        }, {passive: true});
-    },
-
-    isBlockedByExclude: function (a) {
-        if (!this.cfg.excludeSelector) return false;
-
-        if (!this.excludeChecked) {
-            this.excludeNode = this.document.querySelector(this.cfg.excludeSelector);
-            this.excludeChecked = true;
-        }
-        return this.excludeNode ? this.excludeNode.contains(a) : false;
-    },
-
-    toURL: function (href) {
+        let resolvedUrl;
         try {
-            return new URL(href, this.window.location.href);
+            resolvedUrl = new URL(anchorElement.href, window.location.href);
         } catch {
-            return null;
+            return false;
         }
-    },
 
-    prettyUrl: function (href) {
-        try {
-            const u = new URL(href, this.window.location.href);
-            return (u.host + u.pathname + u.search + u.hash).replace(/\/$/, "");
-        } catch {
-            return String(href || "");
-        }
-    },
+        if (resolvedUrl.origin !== window.location.origin) return false;
 
-    isEligibleLink: function (a) {
-        if (!a.closest("main")) return false;
-        if (a.closest("header, nav, footer")) return false;
-        if (a.closest(".tippy-popper")) return false;
-        if (this.isBlockedByExclude(a)) return false;
+        const pathname = resolvedUrl.pathname || '/';
+        if (this.assetPathRegex.test(pathname)) return false;
+        if (pathname.includes('/favicon.')) return false;
+        if (this.fileExtensionRegex.test(pathname)) return false;
 
-        const raw = (a.getAttribute("href") || "").trim();
-        if (!raw) return false;
-        if (raw[0] === "#") return false;
-        if (raw.indexOf("mailto:") === 0 || raw.indexOf("tel:") === 0 || raw.indexOf("javascript:") === 0) return false;
-        if (a.hasAttribute("download")) return false;
-
-        const u = this.toURL(a.href);
-        if (!u) return false;
-        if (u.origin !== this.window.location.origin) return false;
-
-        const path = u.pathname || "/";
-        if (this.ASSET_PATH_RE.test(path)) return false;
-        if (path.indexOf("/favicon.") !== -1) return false;
-        if (this.FILE_EXT_RE.test(path)) return false;
-
-        const last = path.slice(path.lastIndexOf("/") + 1);
-        const dot = last.lastIndexOf(".");
-        if (dot !== -1 && !this.HTML_EXT_RE.test(last)) return false;
+        const lastPathSegment = pathname.slice(pathname.lastIndexOf('/') + 1);
+        const lastDotIndex = lastPathSegment.lastIndexOf('.');
+        if (lastDotIndex !== -1 && !this.htmlExtensionRegex.test(lastPathSegment)) return false;
 
         return true;
-    },
+    }
 
-    setSandboxForInternal: function (iframe) {
-        iframe.setAttribute(
-            "sandbox",
-            "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
-        );
-    },
+    isBlockedByExcludeSelector(anchorElement) {
+        if (!this.configuration.excludeSelector) return false;
 
-    createUI: function () {
-        const box = this.document.createElement("div");
-        box.className = "pp-box";
+        if (!this.excludeSelectorResolved) {
+            this.excludeRootNode = document.querySelector(this.configuration.excludeSelector);
+            this.excludeSelectorResolved = true;
+        }
 
-        const head = this.document.createElement("div");
-        head.className = "pp-head";
+        return this.excludeRootNode ? this.excludeRootNode.contains(anchorElement) : false;
+    }
 
-        const urlA = this.document.createElement("a");
-        urlA.className = "pp-url";
-        urlA.target = "_blank";
-        urlA.rel = "noopener";
+    createPreviewUI() {
+        const previewBox = document.createElement('div');
+        previewBox.className = 'pp-box';
+        previewBox.classList.toggle('pp--dark', this.getIsDarkTheme());
 
-        const close = this.document.createElement("button");
-        close.className = "pp-close";
-        close.type = "button";
-        close.textContent = "×";
-        close.title = "Close";
+        const headerElement = document.createElement('div');
+        headerElement.className = 'pp-head';
 
-        const body = this.document.createElement("div");
-        body.className = "pp-body";
+        const breadcrumbPathElement = document.createElement('div');
+        breadcrumbPathElement.className = 'pp-path';
 
-        const load = this.document.createElement("div");
-        load.className = "pp-load";
-        load.innerHTML = '<div class="pp-spin"></div>';
+        const hostLinkElement = document.createElement('a');
+        hostLinkElement.className = 'pp-url';
+        hostLinkElement.target = '_blank';
+        hostLinkElement.rel = 'noopener';
 
-        head.append(urlA, close);
-        body.append(load);
-        box.append(head, body);
+        const closeButtonElement = document.createElement('button');
+        closeButtonElement.className = 'pp-close';
+        closeButtonElement.type = 'button';
+        // closeButtonElement.textContent = '×';
+        closeButtonElement.innerHTML = `<svg class="pp-close__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"> <path d="M6 6L18 18M18 6L6 18"></path></svg>`;
 
-        return {box: box, urlA: urlA, close: close, body: body, load: load};
-    },
+        const bodyElement = document.createElement('div');
+        bodyElement.className = 'pp-body';
 
-    getOrCreate: function (a) {
-        let inst = this.instances.get(a);
-        if (inst) return inst;
+        const documentContainerElement = document.createElement('div');
+        documentContainerElement.className = 'pp-doc';
 
-        const self = this;
-        const ui = this.createUI();
+        const innerContainerElement = document.createElement('div');
+        innerContainerElement.className = 'pp-doc__inner';
 
-        inst = this.window.tippy(a, {
-            trigger: "manual",
+        documentContainerElement.appendChild(innerContainerElement);
+        bodyElement.appendChild(documentContainerElement);
+        headerElement.append(breadcrumbPathElement, hostLinkElement, closeButtonElement);
+        previewBox.append(headerElement, bodyElement);
+
+        return {
+            previewBox,
+            breadcrumbPathElement,
+            hostLinkElement,
+            closeButtonElement,
+            innerContainerElement,
+        };
+    }
+
+    renderBreadcrumbPath(breadcrumbPathElement, href) {
+        breadcrumbPathElement.textContent = '';
+
+        let resolvedUrl;
+        try {
+            resolvedUrl = new URL(href, window.location.href);
+        } catch {
+            resolvedUrl = null;
+        }
+
+        const pathname = resolvedUrl?.pathname || '/';
+        const segments = pathname.split('/').filter(Boolean);
+
+        const appendSeparator = () => {
+            const separatorElement = document.createElement('span');
+            separatorElement.className = 'pp-sep';
+            separatorElement.textContent = '/';
+            breadcrumbPathElement.appendChild(separatorElement);
+        };
+
+        const appendSegment = (segmentLabel, segmentUrl) => {
+            const segmentLinkElement = document.createElement('a');
+            segmentLinkElement.className = 'pp-seg';
+            segmentLinkElement.href = segmentUrl;
+            segmentLinkElement.target = '_blank';
+            segmentLinkElement.rel = 'noopener';
+
+            const segmentChipElement = document.createElement('span');
+            segmentChipElement.className = 'pp-seg__chip';
+            segmentChipElement.textContent = segmentLabel;
+
+            segmentLinkElement.appendChild(segmentChipElement);
+            breadcrumbPathElement.appendChild(segmentLinkElement);
+        };
+
+        let accumulatedPath = '';
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+            if (segmentIndex > 0) appendSeparator();
+            accumulatedPath += '/' + segments[segmentIndex];
+            appendSegment(segments[segmentIndex], window.location.origin + accumulatedPath + '/');
+        }
+    }
+
+    mountPreviewForAnchor(anchorElement) {
+        if (anchorElement._postPreviewTippyInstance) return;
+
+        const ui = this.createPreviewUI();
+
+        const tippyInstance = window.tippy(anchorElement, {
+            trigger: 'manual',
             interactive: true,
             hideOnClick: false,
-            placement: "bottom-start",
-            animation: "shift-away",
-            theme: "pp",
+            placement: 'bottom-start',
+            animation: 'shift-away',
+            theme: 'pp',
             arrow: false,
             inertia: true,
-            duration: [120, 110],
-            maxWidth: "none",
-            appendTo: this.document.body,
+            duration: [this._defaultTippyDurationShow, this._defaultTippyDurationHide],
+            maxWidth: 'none',
+            appendTo: document.body,
             popperOptions: {
                 modifiers: {
-                    offset: {offset: "0,8"},
-                    preventOverflow: {boundariesElement: "viewport", padding: 8},
-                    flip: {enabled: false}
-                }
+                    offset: {offset: '0,8'},
+                    preventOverflow: {boundariesElement: 'viewport', padding: 8},
+                    flip: {enabled: false},
+                },
             },
-            content: ui.box,
+            content: ui.previewBox,
 
-            onShow: function (instance) {
-                if (self.active && self.active !== instance) {
+            onShow: (instance) => {
+                if (this.activeTippyInstance && this.activeTippyInstance !== instance) {
                     try {
-                        self.active.hide();
+                        this.activeTippyInstance.hide();
                     } catch {
                     }
                 }
-                self.active = instance;
+                this.activeTippyInstance = instance;
+                this.activeAnchorElement = anchorElement;
 
-                const href = a.href;
-                ui.urlA.href = href;
-                ui.urlA.textContent = self.prettyUrl(href);
+                const href = anchorElement.href;
 
-                ui.close.onclick = function (e) {
-                    e.preventDefault();
-                    e.stopPropagation();
+                this.renderBreadcrumbPath(ui.breadcrumbPathElement, href);
+
+                const parsedUrl = new URL(href, window.location.href);
+                ui.hostLinkElement.href = href;
+                ui.hostLinkElement.textContent = parsedUrl.host;
+
+                ui.closeButtonElement.onclick = (clickEvent) => {
+                    clickEvent.preventDefault();
+                    clickEvent.stopPropagation();
                     try {
                         instance.hide();
                     } catch {
                     }
                 };
 
-                ui.load.hidden = false;
+                this.abortAnchorRequest(anchorElement);
 
-                ui.body.querySelectorAll("iframe").forEach(function (f) {
-                    try {
-                        f.src = "about:blank";
-                    } catch {
-                    }
-                    f.remove();
-                });
+                anchorElement._ppReqSeq = (anchorElement._ppReqSeq || 0) + 1;
+                const seq = anchorElement._ppReqSeq;
 
-                const iframe = self.document.createElement("iframe");
-                iframe.className = "pp-frame";
-                iframe.referrerPolicy = "no-referrer";
-                self.setSandboxForInternal(iframe);
+                const abortController = new AbortController();
+                anchorElement._ppAbortController = abortController;
 
-                iframe.addEventListener("load", function () {
-                    ui.load.hidden = true;
-                    if (instance.popperInstance && instance.popperInstance.update) instance.popperInstance.update();
-                }, {once: true});
-
-                iframe.src = href;
-                ui.body.appendChild(iframe);
-
-                if (instance.popperInstance && instance.popperInstance.update) instance.popperInstance.update();
+                this.loadPreviewHtml(href, abortController.signal)
+                    .then((previewHtml) => {
+                        if (!previewHtml) return;
+                        ui.innerContainerElement.innerHTML = previewHtml;
+                        queueMicrotask(() => instance.popperInstance?.update?.());
+                    })
+                    .catch((error) => {
+                        ui.innerContainerElement.textContent = 'Failed to load preview.';
+                        this.log('load failed', {href, error});
+                        queueMicrotask(() => instance.popperInstance?.update?.());
+                    });
             },
 
-            onHidden: function (instance) {
-                ui.body.querySelectorAll("iframe").forEach(function (f) {
-                    try {
-                        f.src = "about:blank";
-                    } catch {
-                    }
-                    f.remove();
-                });
-                ui.load.hidden = true;
-                if (self.active === instance) self.active = null;
-            }
+            onHidden: () => {
+                this.abortAnchorRequest(anchorElement);
+                if (this.activeTippyInstance === tippyInstance) {
+                    this.activeTippyInstance = null;
+                    this.activeAnchorElement = null;
+                }
+            },
         });
 
-        this.attachHover(a, inst);
-        this.instances.set(a, inst);
-        return inst;
-    },
+        anchorElement._postPreviewTippyInstance = tippyInstance;
+        this.attachHoverBehavior(anchorElement, tippyInstance);
+    }
 
-    attachHover: function (a, inst) {
-        const self = this;
+    attachHoverBehavior(anchorElement, tippyInstance) {
+        let isOverAnchor = false;
+        let isOverPopover = false;
 
-        let overRef = false;
-        let overPop = false;
-        let showT = 0;
-        let hideT = 0;
+        let showTimeoutId = 0;
+        let hideTimeoutId = 0;
 
-        function scheduleHide() {
-            if (hideT) self.window.clearTimeout(hideT);
-            hideT = self.window.setTimeout(function () {
-                if (overRef || overPop) return;
+        const scheduleHide = () => {
+            if (hideTimeoutId) window.clearTimeout(hideTimeoutId);
+
+            hideTimeoutId = window.setTimeout(() => {
+                if (isOverAnchor || isOverPopover) return;
                 try {
-                    inst.hide();
+                    tippyInstance.hide();
                 } catch {
                 }
-            }, self.cfg.hideDelay);
-        }
+            }, this.configuration.hideDelay);
+        };
 
-        a.addEventListener("mouseenter", function () {
-            overRef = true;
-            if (hideT) {
-                self.window.clearTimeout(hideT);
-                hideT = 0;
-            }
-            if (showT) self.window.clearTimeout(showT);
-            showT = self.window.setTimeout(function () {
-                if (!overRef) return;
-                try {
-                    inst.show();
-                } catch {
+        anchorElement.addEventListener(
+            'mouseenter',
+            () => {
+                isOverAnchor = true;
+
+                if (hideTimeoutId) {
+                    window.clearTimeout(hideTimeoutId);
+                    hideTimeoutId = 0;
                 }
-            }, self.cfg.showDelay);
-        }, {passive: true});
 
-        a.addEventListener("mouseleave", function () {
-            overRef = false;
-            if (showT) {
-                self.window.clearTimeout(showT);
-                showT = 0;
-            }
-            scheduleHide();
-        }, {passive: true});
-
-        const origShow = inst.show.bind(inst);
-        inst.show = function () {
-            origShow();
-            queueMicrotask(function () {
-                const pop = inst.popper;
-                if (!pop || pop._ppHooked) return;
-                pop._ppHooked = true;
-
-                pop.addEventListener("mouseenter", function () {
-                    overPop = true;
-                    if (hideT) {
-                        self.window.clearTimeout(hideT);
-                        hideT = 0;
+                if (showTimeoutId) window.clearTimeout(showTimeoutId);
+                showTimeoutId = window.setTimeout(() => {
+                    if (!isOverAnchor) return;
+                    try {
+                        tippyInstance.show();
+                    } catch {
                     }
-                }, {passive: true});
+                }, this.configuration.showDelay);
+            },
+            {passive: true}
+        );
 
-                pop.addEventListener("mouseleave", function () {
-                    overPop = false;
-                    scheduleHide();
-                }, {passive: true});
+        anchorElement.addEventListener(
+            'mouseleave',
+            () => {
+                isOverAnchor = false;
+
+                if (showTimeoutId) {
+                    window.clearTimeout(showTimeoutId);
+                    showTimeoutId = 0;
+                }
+
+                scheduleHide();
+            },
+            {passive: true}
+        );
+
+        const originalShow = tippyInstance.show.bind(tippyInstance);
+        tippyInstance.show = () => {
+            originalShow();
+
+            queueMicrotask(() => {
+                const popoverElement = tippyInstance.popper;
+                if (!popoverElement || popoverElement._postPreviewHoverHooked) return;
+
+                popoverElement._postPreviewHoverHooked = true;
+
+                popoverElement.addEventListener(
+                    'mouseenter',
+                    () => {
+                        isOverPopover = true;
+                        if (hideTimeoutId) {
+                            window.clearTimeout(hideTimeoutId);
+                            hideTimeoutId = 0;
+                        }
+                    },
+                    {passive: true}
+                );
+
+                popoverElement.addEventListener(
+                    'mouseleave',
+                    () => {
+                        isOverPopover = false;
+                        scheduleHide();
+                    },
+                    {passive: true}
+                );
             });
         };
     }
-};
 
-function boot() {
-    try {
-        POST_PREVIEW.init();
-    } catch (e) {
+    abortAnchorRequest(anchorElement) {
+        const controller = anchorElement._ppAbortController;
+        if (!controller) return;
+
+        anchorElement._ppAbortController = null;
+
+        try {
+            controller.abort();
+        } catch {
+        }
+    }
+
+    async loadPreviewHtml(href, abortSignal) {
+        const response = await fetch(href, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            signal: abortSignal,
+            headers: {Accept: 'text/html'},
+        });
+
+        if (!response.ok) return null;
+
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength && contentLength > this.configuration.maxBytes) return null;
+
+        const rawHtml = await response.text();
+        if (this.configuration.maxBytes && rawHtml.length > this.configuration.maxBytes) return null;
+
+        return this.extractPreviewHtml(rawHtml, href) || null;
+    }
+
+    extractPreviewHtml(html, href) {
+        const parsedDocument = new DOMParser().parseFromString(html, 'text/html');
+        const baseUrl = new URL(href, window.location.href);
+
+        const mainContentElement =
+            parsedDocument.querySelector('main article.page.single') ||
+            parsedDocument.querySelector('div.page.archive') ||
+            parsedDocument.querySelector('main article') ||
+            parsedDocument.querySelector('article.page.single') ||
+            parsedDocument.querySelector('article') ||
+            parsedDocument.querySelector('main');
+
+        if (!mainContentElement) return '';
+
+        const clonedRoot = mainContentElement.cloneNode(true);
+
+        clonedRoot
+            .querySelectorAll('script,style,link[rel="stylesheet"],iframe,object,embed')
+            .forEach((node) => node.remove());
+
+        clonedRoot
+            .querySelectorAll('#comments,.comment,.comments,.giscus,.utterances,meting-js,.meting,.aplayer,.aplayer-fixed')
+            .forEach((node) => node.remove());
+
+        const makeAbsoluteAttribute = (element, attributeName) => {
+            const attributeValue = element.getAttribute(attributeName);
+            if (!attributeValue) return;
+
+            const trimmedValue = attributeValue.trim();
+            if (!trimmedValue) return;
+            if (trimmedValue[0] === '#') return;
+            if (/^(data:|mailto:|tel:|javascript:)/i.test(trimmedValue)) return;
+
+            try {
+                element.setAttribute(attributeName, new URL(trimmedValue, baseUrl).href);
+            } catch {
+            }
+        };
+
+        clonedRoot.querySelectorAll('a[href]').forEach((anchor) => {
+            makeAbsoluteAttribute(anchor, 'href');
+            anchor.target = '_blank';
+            anchor.rel = 'noopener';
+        });
+
+        clonedRoot.querySelectorAll('img').forEach((img) => {
+            const dataSource =
+                img.getAttribute('data-src') ||
+                img.getAttribute('data-original') ||
+                img.getAttribute('data-lazy-src');
+
+            const src = img.getAttribute('src');
+            if ((!src || src === '') && dataSource) img.setAttribute('src', dataSource);
+
+            makeAbsoluteAttribute(img, 'src');
+            makeAbsoluteAttribute(img, 'data-src');
+
+            img.loading = 'lazy';
+            img.decoding = 'async';
+        });
+
+        const idPrefix = 'pp-' + this.hash32(baseUrl.pathname) + '-';
+        const oldToNewIdMap = new Map();
+
+        clonedRoot.querySelectorAll('[id]').forEach((elementWithId) => {
+            const oldId = elementWithId.id;
+            if (!oldId) return;
+
+            const newId = idPrefix + oldId;
+            oldToNewIdMap.set(oldId, newId);
+            elementWithId.id = newId;
+        });
+
+        clonedRoot.querySelectorAll('a[href^="#"]').forEach((hashAnchor) => {
+            const oldTargetId = hashAnchor.getAttribute('href').slice(1);
+            const newTargetId = oldToNewIdMap.get(oldTargetId);
+            if (newTargetId) hashAnchor.setAttribute('href', '#' + newTargetId);
+        });
+
+        clonedRoot.querySelectorAll('label[for]').forEach((label) => {
+            const oldFor = label.getAttribute('for');
+            const newFor = oldToNewIdMap.get(oldFor);
+            if (newFor) label.setAttribute('for', newFor);
+        });
+
+        return clonedRoot.outerHTML;
+    }
+
+    hash32(input) {
+        const s = String(input || '');
+        let hash = 2166136261;
+
+        for (let index = 0; index < s.length; index++) {
+            hash ^= s.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+
+        return (hash >>> 0).toString(16);
     }
 }
 
-if (document.readyState === "complete") boot();
-else window.addEventListener("load", boot, {once: true});
+if (document.readyState === 'complete') {
+    PostPreview.boot();
+} else {
+    window.addEventListener('load', () => PostPreview.boot(), {once: true});
+}
